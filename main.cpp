@@ -2,12 +2,16 @@
 #include <vector>
 #include <fstream>
 #include <map>
+#include <cstring>
+#include <cstdio>
 #ifdef _WIN32
     #include <direct.h>   // _mkdir on Windows
 #else
     #include <sys/stat.h> // mkdir on Linux
     #include <sys/types.h>
     #include <arpa/inet.h>
+    #include <netdb.h>
+    #include <unistd.h>
     #define _mkdir(name) mkdir(name, 0777)
 #endif
 #include <zlib.h>
