@@ -56,7 +56,6 @@ SkinGetBE/
 ├─ Util/
 │  ├─ Logger.cpp
 │  └─ Buffer.cpp
-├─ zlib/               # zlibソース(※適宜zlibのソースを設置してください)
 └─ README.md
 
 ```
@@ -188,4 +187,3 @@ SkinGetBE では、
 ## ライセンス
 
 MIT License（予定）
-

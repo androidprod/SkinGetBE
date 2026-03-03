@@ -1,1 +1,2 @@
-g++ -O3 main.cpp Util/Logger.cpp zlib/inflate.c zlib/inftrees.c zlib/inffast.c zlib/adler32.c zlib/crc32.c zlib/zutil.c zlib/compress.c zlib/deflate.c zlib/trees.c -o SkinGetBE.exe -lws2_32 -lwsock32
+cmake -B build
+cmake --build build --config Release

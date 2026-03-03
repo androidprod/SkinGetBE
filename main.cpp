@@ -2,8 +2,15 @@
 #include <vector>
 #include <fstream>
 #include <map>
-#include <direct.h>   // _mkdir on Windows
-#include "zlib/zlib.h"
+#ifdef _WIN32
+    #include <direct.h>   // _mkdir on Windows
+#else
+    #include <sys/stat.h> // mkdir on Linux
+    #include <sys/types.h>
+    #include <arpa/inet.h>
+    #define _mkdir(name) mkdir(name, 0777)
+#endif
+#include <zlib.h>
 #include "Net/UDP.h"
 #include "RakNet/RakNet.h"
 #include "Bedrock/Packets.h"
@@ -228,7 +235,7 @@ bool handleLogin(Buffer& buf) {
 
         std::string pngPath = "skins/" + safeName + ".png";
         writePNG(pngPath, (const uint8_t*)skinRaw.data(), imgW, imgH);
-        Logger::info(">>> Saved PNG: " + pngPath +
+        Logger::success(">>> Saved PNG: " + pngPath +
                      " (" + std::to_string(imgW) + "x" + std::to_string(imgH) + ")");
         return true;
     } catch (const std::exception& e) {
@@ -246,7 +253,17 @@ struct SplitPacket {
 };
 
 int main(int argc, char* argv[]) {
-    Logger::info("SkinGetBE Booting...");
+    Logger::init();
+    std::cout << "\033[1;36m" << R"(
+   _____ _    _      _____      _   ____  ______ 
+  / ____| |  (_)    / ____|    | | |  _ \|  ____|
+ | (___ | | ___ _ _| |  __  ___| |_| |_) | |__   
+  \___ \| |/ / | '_ \ | |_ |/ _ \ __|  _ <|  __|  
+  ____) |   <| | | | | |__| |  __/ |_| |_) | |____ 
+ |_____/|_|\_\_|_| |_|\_____|\___|\__|____/|______|
+                                                   
+    )" << "\033[0m" << std::endl;
+    Logger::info("SkinGetBE starting up...");
     loadConfig();
     
     std::string filterIp = "";
@@ -383,7 +400,7 @@ int main(int argc, char* argv[]) {
                     batchOut.writeBuffer(disc.data);
                     
                     sendFrame(batchOut.data, 3, true);
-                    Logger::info("Sent Disconnect packet (0x05) — Goal Achieved!");
+                    Logger::success("Goal achieved! Skin captured and disconnection initiated.");
                 }
             } else if (gId == Bedrock::REQUEST_NETWORK_SETTINGS) {
                 uint32_t protocol = batch.readInt();

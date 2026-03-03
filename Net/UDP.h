@@ -1,30 +1,47 @@
 #ifndef UDP_H
 #define UDP_H
 
-#include <winsock2.h>
-#include <ws2tcpip.h>
+#ifdef _WIN32
+    #include <winsock2.h>
+    #include <ws2tcpip.h>
+    #pragma comment(lib, "ws2_32.lib")
+    typedef int socklen_t;
+#else
+    #include <sys/socket.h>
+    #include <netinet/in.h>
+    #include <arpa/inet.h>
+    #include <unistd.h>
+    #include <cstring>
+    #define SOCKET int
+    #define INVALID_SOCKET -1
+    #define SOCKET_ERROR -1
+    #define closesocket close
+#endif
+
 #include <cstdint>
 #include <string>
 #include <vector>
 #include <stdexcept>
 #include "../Util/Logger.h"
 
-#pragma comment(lib, "ws2_32.lib")
-
 class UDP {
 public:
     SOCKET sock;
     
     UDP() : sock(INVALID_SOCKET) {
+#ifdef _WIN32
         WSADATA wsa;
         if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) {
             throw std::runtime_error("Winsock init failed");
         }
+#endif
     }
 
     ~UDP() {
         if (sock != INVALID_SOCKET) closesocket(sock);
+#ifdef _WIN32
         WSACleanup();
+#endif
     }
 
     void listen(int port) {
@@ -32,9 +49,10 @@ public:
         if (sock == INVALID_SOCKET) throw std::runtime_error("Socket creation failed");
 
         sockaddr_in server;
+        memset(&server, 0, sizeof(server));
         server.sin_family = AF_INET;
         server.sin_addr.s_addr = INADDR_ANY;
-        server.sin_port = htons((u_short)port);
+        server.sin_port = htons((uint16_t)port);
 
         if (bind(sock, (sockaddr*)&server, sizeof(server)) == SOCKET_ERROR) {
             throw std::runtime_error("Bind failed");
@@ -43,10 +61,9 @@ public:
     }
 
     int recv(uint8_t* buf, int len, sockaddr_in& from) {
-        int fromLen = sizeof(from);
+        socklen_t fromLen = sizeof(from);
         int res = recvfrom(sock, (char*)buf, len, 0, (sockaddr*)&from, &fromLen);
         if (res > 0 && Logger::debugEnabled) {
-             // Avoid spamming too much, but for initial debugging this is helpful
              // Logger::debug("Recv raw " + std::to_string(res) + " bytes from " + inet_ntoa(from.sin_addr));
         }
         return res;
