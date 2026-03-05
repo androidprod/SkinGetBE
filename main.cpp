@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <vector>
 #include <fstream>
 #include <map>
@@ -29,9 +29,11 @@
 #include <chrono>
 #include <memory>
 #include <future>
+#include <ctime>
+#include <optional>
 
 // zlib raw deflate decompression (BE 1.20.30+ batch format)
-// algo byte 0x00 → raw deflate (no zlib 0x78 header)
+// algo byte 0x00 竊・raw deflate (no zlib 0x78 header)
 static std::vector<uint8_t> zlibDecompress(const uint8_t* src, size_t srcLen) {
     std::vector<uint8_t> out;
     out.resize(srcLen * 4 + 1024);
@@ -80,10 +82,10 @@ static std::vector<uint8_t> zlibCompress(const uint8_t* src, size_t srcLen, int 
     return tmp;
 }
 
-// ミニマルPNGエンコーダー (zlibのcompress2を利用)
+// 繝溘ル繝槭ΝPNG繧ｨ繝ｳ繧ｳ繝ｼ繝繝ｼ (zlib縺ｮcompress2繧貞茜逕ｨ)
 static void writePNG(const std::string& path,
                      const uint8_t* rgba, int w, int h) {
-    // 各スキャンラインに filter byte 0 (フィルタなし) を付与
+    // 蜷・・ｽ・ｽ繧ｭ繝｣繝ｳ繝ｩ繧､繝ｳ縺ｫ filter byte 0 (繝輔ぅ繝ｫ繧ｿ縺ｪ縺・ 繧剃ｻ倅ｸ・
     std::vector<uint8_t> raw;
     raw.reserve((size_t)(1 + w * 4) * h);
     for (int y = 0; y < h; y++) {
@@ -185,77 +187,93 @@ void showHelp() {
 bool handleLogin(Buffer& buf) {
     Logger::info("Handling Bedrock Login Packet...");
     try {
-        uint32_t protocol = buf.readInt();
-        Logger::info("Client Protocol: " + std::to_string(protocol));
-
-        uint32_t payloadLen = buf.readVarInt();
-        uint32_t chainLen = buf.readLInt();
-        if (buf.offset + chainLen > buf.data.size()) return false;
-        
-        std::string chainJson((const char*)buf.data.data() + buf.offset, chainLen);
-        buf.offset += chainLen;
-        
-        // Extract Player Name from chain JSON
-        // The chain contains multiple JWT strings. We need to find the one with identity data.
+        struct LoginFields {
+            uint32_t protocol = 0;
+            std::string chainJson;
+            std::string skinJWT;
+        };
+        auto tryParseLogin = [](const Buffer& source, bool protocolVarInt, bool hasPayloadLength) -> std::optional<LoginFields> {
+            Buffer tmp(source);
+            LoginFields out;
+            try {
+                out.protocol = protocolVarInt ? tmp.readVarInt() : tmp.readInt();
+                if (hasPayloadLength) (void)tmp.readVarInt();
+                uint32_t chainLen = tmp.readLInt();
+                if (chainLen == 0 || tmp.offset + chainLen > tmp.data.size()) return std::nullopt;
+                out.chainJson.assign((const char*)tmp.data.data() + tmp.offset, chainLen);
+                tmp.offset += chainLen;
+                uint32_t skinLen = tmp.readLInt();
+                if (skinLen == 0 || tmp.offset + skinLen > tmp.data.size()) return std::nullopt;
+                out.skinJWT.assign((const char*)tmp.data.data() + tmp.offset, skinLen);
+                if (out.chainJson.find('{') == std::string::npos) return std::nullopt;
+                if (std::count(out.skinJWT.begin(), out.skinJWT.end(), '.') != 2) return std::nullopt;
+                return out;
+            } catch (...) {
+                return std::nullopt;
+            }
+        };
+        std::optional<LoginFields> parsed = tryParseLogin(buf, false, false);
+        if (!parsed.has_value()) parsed = tryParseLogin(buf, true, false);
+        if (!parsed.has_value()) parsed = tryParseLogin(buf, false, true);
+        if (!parsed.has_value()) parsed = tryParseLogin(buf, true, true);
+        if (!parsed.has_value()) return false;
+        Logger::info("Client Protocol: " + std::to_string(parsed->protocol));
         std::string playerName = "UnknownPlayer";
         size_t searchPos = 0;
-        while ((searchPos = chainJson.find("\"", searchPos)) != std::string::npos) {
+        while ((searchPos = parsed->chainJson.find("\"", searchPos)) != std::string::npos) {
             size_t jwtStart = searchPos + 1;
-            size_t jwtEnd = chainJson.find("\"", jwtStart);
+            size_t jwtEnd = parsed->chainJson.find("\"", jwtStart);
             if (jwtEnd == std::string::npos) break;
-            
-            std::string token = chainJson.substr(jwtStart, jwtEnd - jwtStart);
+            std::string token = parsed->chainJson.substr(jwtStart, jwtEnd - jwtStart);
             searchPos = jwtEnd + 1;
-            
-            // Tokens are fairly long and have exactly two dots
             if (token.length() > 50 && std::count(token.begin(), token.end(), '.') == 2) {
                 std::string payload = JWT::getPayload(token);
                 if (!payload.empty()) {
-                    // Priority: xname (Xbox Live gamertag) > ThirdPartyName > displayName
                     std::string name = JWT::getJsonValue(payload, "xname");
                     if (name.empty()) name = JWT::getJsonValue(payload, "ThirdPartyName");
                     if (name.empty()) name = JWT::getJsonValue(payload, "displayName");
-                    
-                    if (!name.empty()) {
-                        playerName = name;
-                        // Continue scanning; a later token might have a higher-priority name
-                    }
+                    if (!name.empty()) playerName = name;
                 }
             }
         }
         Logger::info("Detected Player: " + playerName);
-
-        uint32_t skinLen = buf.readLInt();
-        if (buf.offset + skinLen > buf.data.size()) return false;
-        std::string skinJWT((const char*)buf.data.data() + buf.offset, skinLen);
-        buf.offset += skinLen;
-
-        std::string skinJson = JWT::getPayload(skinJWT);
+        std::string skinJson = JWT::getPayload(parsed->skinJWT);
         if (skinJson.empty()) return false;
-
-        std::string skinId    = JWT::getJsonValue(skinJson, "SkinId");
+        std::string skinId = JWT::getJsonValue(skinJson, "SkinId");
         std::string skinImage = JWT::getJsonValue(skinJson, "SkinData");
-
         if (skinImage.empty()) return false;
-
         std::string skinRaw = Base64::decode(skinImage);
+        if (skinRaw.empty() || (skinRaw.size() % 4) != 0) return false;
+        std::string widthStr = JWT::getJsonValue(skinJson, "SkinImageWidth");
+        std::string heightStr = JWT::getJsonValue(skinJson, "SkinImageHeight");
         size_t pixels = skinRaw.size() / 4;
-        int imgW, imgH;
-        if      (pixels == 64*32 ) { imgW=64;  imgH=32;  }
-        else if (pixels == 64*64 ) { imgW=64;  imgH=64;  }
-        else if (pixels == 128*64) { imgW=128; imgH=64;  }
-        else if (pixels == 128*128){ imgW=128; imgH=128; }
-        else { imgW=64; imgH=(int)(pixels/64); if(imgH==0) imgH=64; }
-
+        int imgW = 0;
+        int imgH = 0;
+        try {
+            if (!widthStr.empty()) imgW = std::stoi(widthStr);
+            if (!heightStr.empty()) imgH = std::stoi(heightStr);
+        } catch (...) {
+            imgW = 0;
+            imgH = 0;
+        }
+        if (imgW <= 0 || imgH <= 0 || (size_t)imgW * (size_t)imgH != pixels) {
+            if      (pixels == 64 * 32)   { imgW = 64;  imgH = 32;  }
+            else if (pixels == 64 * 64)   { imgW = 64;  imgH = 64;  }
+            else if (pixels == 128 * 64)  { imgW = 128; imgH = 64;  }
+            else if (pixels == 128 * 128) { imgW = 128; imgH = 128; }
+            else {
+                imgW = 64;
+                imgH = (int)(pixels / 64);
+                if (imgH <= 0) imgH = 64;
+            }
+        }
         auto sanitize = [](std::string s) {
-            for (auto& c : s) if (c=='/' || c=='\\' || c==':' || c=='*' || c=='?' || c=='"' || c=='<' || c=='>' || c=='|') c='_';
+            for (auto& c : s) if (c=='/' || c=='\\' || c==':' || c=='*' || c=='?' || c=='\"' || c=='<' || c=='>' || c=='|') c='_';
             return s;
         };
         playerName = sanitize(playerName);
         skinId = sanitize(skinId);
-
         _mkdir("skins");
-
         std::string baseName = playerName + "_" + skinId;
         std::string targetPath = "skins/" + baseName + ".png";
         int count = 1;
@@ -264,7 +282,6 @@ bool handleLogin(Buffer& buf) {
             if (!f.good()) break;
             targetPath = "skins/" + baseName + "_" + std::to_string(count++) + ".png";
         }
-
         writePNG(targetPath, (const uint8_t*)skinRaw.data(), imgW, imgH);
         Logger::success(">>> Saved PNG: " + targetPath + " (" + std::to_string(imgW) + "x" + std::to_string(imgH) + ")");
         return true;
@@ -273,7 +290,6 @@ bool handleLogin(Buffer& buf) {
     }
     return false;
 }
-
 
 struct SplitPacket {
     uint32_t count        = 0;
@@ -340,63 +356,70 @@ private:
     bool stop;
 };
 
-// NAT Discovery via STUN
-static std::string discoverExternalIP() {
-    UDP client;
+// NAT Discovery via STUN using the provided server socket
+static std::string discoverExternalIP(SOCKET serverSock) {
     try {
-        sockaddr_in stunAddr;
-        memset(&stunAddr, 0, sizeof(stunAddr));
-        stunAddr.sin_family = AF_INET;
-        stunAddr.sin_port = htons(19302);
-        struct hostent* host = gethostbyname("stun.l.google.com");
-        if (!host) return "Unknown (DNS Failed)";
-        memcpy(&stunAddr.sin_addr, host->h_addr_list[0], host->h_length);
+        std::vector<std::pair<std::string, int>> servers = {
+            {"stun.l.google.com", 19302},
+            {"stun1.l.google.com", 19302},
+            {"stun.sipgate.net", 3478}
+        };
 
-        // STUN Message Header (20 bytes)
-        // Type: 0x0001 (Binding Request)
-        // Length: 0x0000
-        // Magic: 0x2112A442
-        // Transaction ID: 12 random bytes
-        uint8_t request[20] = {0,1, 0,0, 0x21,0x12,0xA4,0x42};
-        for(int i=8; i<20; i++) request[i] = (uint8_t)(rand() % 256);
+        for (auto& s : servers) {
+            sockaddr_in stunAddr;
+            memset(&stunAddr, 0, sizeof(stunAddr));
+            stunAddr.sin_family = AF_INET;
+            stunAddr.sin_port = htons(s.second);
+            struct hostent* host = gethostbyname(s.first.c_str());
+            if (!host) continue;
+            memcpy(&stunAddr.sin_addr, host->h_addr_list[0], host->h_length);
 
-        client.send(request, 20, stunAddr);
+            uint8_t request[20] = {0,1, 0,0, 0x21,0x12,0xA4,0x42};
+            for(int i=8; i<20; i++) request[i] = (uint8_t)(rand() % 256);
 
-        uint8_t response[512];
-        sockaddr_in from;
-        #ifdef _WIN32
-        // Set timeout for STUN recv
-        int timeout = 1000;
-        setsockopt(client.sock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
-        #endif
+            sendto(serverSock, (const char*)request, 20, 0, (const sockaddr*)&stunAddr, sizeof(stunAddr));
 
-        int len = client.recv(response, sizeof(response), from);
-        if (len < 20) return "Unknown (Timeout)";
+            uint8_t response[512];
+            sockaddr_in from;
+            socklen_t fromLen = sizeof(from);
+            
+            #ifdef _WIN32
+            int timeout = 1500;
+            setsockopt(serverSock, SOL_SOCKET, SO_RCVTIMEO, (char*)&timeout, sizeof(timeout));
+            #endif
 
-        // Skip header and look for XOR-MAPPED-ADDRESS (0x0020) or MAPPED-ADDRESS (0x0001)
-        int pos = 20;
-        while (pos + 4 <= len) {
-            uint16_t attrType = (response[pos] << 8) | response[pos+1];
-            uint16_t attrLen  = (response[pos+2] << 8) | response[pos+3];
-            pos += 4;
-            if (attrType == 0x0020 && attrLen >= 8) { // XOR-MAPPED-ADDRESS
-                uint8_t family = response[pos+1];
-                if (family == 0x01) { // IPv4
-                    uint32_t ip = ((uint32_t)response[pos+4] << 24) | ((uint32_t)response[pos+5] << 16) |
-                                  ((uint32_t)response[pos+6] << 8) | (uint32_t)response[pos+7];
-                    ip ^= 0x2112A442; // XOR with Magic Cookie
-                    char buf[16];
-                    sprintf(buf, "%d.%d.%d.%d", (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF);
-                    return std::string(buf);
+            int len = recvfrom(serverSock, (char*)response, sizeof(response), 0, (sockaddr*)&from, &fromLen);
+            
+            // Set back to no timeout (or a smaller one for game loop)
+            #ifdef _WIN32
+            int noTimeout = 0;
+            setsockopt(serverSock, SOL_SOCKET, SO_RCVTIMEO, (char*)&noTimeout, sizeof(noTimeout));
+            #endif
+
+            if (len >= 20) {
+                int pos = 20;
+                while (pos + 4 <= len) {
+                    uint16_t attrType = (response[pos] << 8) | response[pos+1];
+                    uint16_t attrLen  = (response[pos+2] << 8) | response[pos+3];
+                    pos += 4;
+                    if (attrType == 0x0020 && attrLen >= 8) { // XOR-MAPPED-ADDRESS
+                        uint32_t ip = ((uint32_t)response[pos+4] << 24) | ((uint32_t)response[pos+5] << 16) |
+                                      ((uint32_t)response[pos+6] << 8) | (uint32_t)response[pos+7];
+                        ip ^= 0x2112A442;
+                        char buf[16];
+                        sprintf(buf, "%d.%d.%d.%d", (ip>>24)&0xFF, (ip>>16)&0xFF, (ip>>8)&0xFF, ip&0xFF);
+                        return std::string(buf);
+                    }
+                    pos += attrLen;
                 }
             }
-            pos += attrLen;
         }
     } catch (...) {}
-    return "Unknown";
+    return "Unknown (Maybe behind strict NAT)";
 }
 
 int main(int argc, char* argv[]) {
+    srand((unsigned int)time(nullptr));
     Logger::init();
     std::cout << "\033[1;36m" << R"(
    _____ _    _      _____      _   ____  ______ 
@@ -422,12 +445,6 @@ int main(int argc, char* argv[]) {
 
     showHelp();
     
-    // NAT Traversal / Discovery
-    Logger::info("Attempting NAT discovery (STUN)...");
-    std::string extIP = discoverExternalIP();
-    Logger::success("External IP detected: " + extIP);
-    Logger::info("Note: Ensure UDP Port 19132 is open on your router if not reachable.");
-
     UDP server;
     try {
         server.listen(19132);
@@ -435,6 +452,12 @@ int main(int argc, char* argv[]) {
         Logger::error(e.what());
         return 1;
     }
+
+    // NAT Traversal / Discovery
+    Logger::info("Attempting NAT discovery (STUN)...");
+    std::string extIP = discoverExternalIP(server.sock);
+    Logger::success("External IP detected: " + extIP);
+    Logger::info("Note: Ensure UDP Port 19132 is open on your router if not reachable.");
 
     if (!filterIp.empty()) {
         Logger::info("Filter rules applied: " + filterIp);
@@ -500,7 +523,7 @@ int main(int argc, char* argv[]) {
                     bool useZlib = false;
                     if (algo == 0x00) {
                         inner.offset++;
-                        useZlib = true; // client is using zlib → we must also use zlib for responses
+                        useZlib = true; // client is using zlib 竊・we must also use zlib for responses
                         batchRaw = zlibDecompress(inner.data.data() + inner.offset, inner.data.size() - inner.offset);
                     } else if (algo == 0xFF) {
                         inner.offset++;
@@ -518,8 +541,7 @@ int main(int argc, char* argv[]) {
                             auto comp = zlibCompress(payload.data(), payload.size());
                             out.writeBuffer(comp);
                         } else {
-                            // fallback / raw batch: no algo byte, just varint length prefix
-                            out.writeVarInt((uint32_t)payload.size());
+                            // fallback / raw batch without compression
                             out.writeBuffer(payload);
                         }
                         return out.data;
@@ -540,15 +562,14 @@ int main(int argc, char* argv[]) {
                                 playStatus.writeInt(0); // 0 = LOGIN_SUCCESS
 
                                 // Prepare Disconnect
-                                std::string discMsg;
-                                discMsg += "Skin Captured!\nThank you for using SkinGetBE.";
+                                std::string discMsg = "Skin captured";
                                 
                                 Buffer disc;
                                 disc.writeVarInt(Bedrock::DISCONNECT);
                                 disc.writeSignedVarInt(0);    // reason
-                                disc.writeBool(false);        // skipMessage = false
+                                disc.writeBool(false);        // hideReason = false
                                 disc.writeVarString(discMsg); // message
-                                disc.writeVarString(discMsg); // filteredMessage (Same as message)
+                                disc.writeVarString(discMsg); // filteredMessage
 
                                 // Bundle BOTH packets into a single 0xfe batch for atomic delivery
                                 Buffer combined;
@@ -568,9 +589,11 @@ int main(int argc, char* argv[]) {
                             // Reverting to the exact format that worked previously
                             Buffer settings;
                             settings.writeVarInt(Bedrock::NETWORK_SETTINGS);
-                            settings.writeLShort(0);
+                            settings.writeLShort(1); // compression threshold
                             settings.writeLShort(0); // zlib
-                            settings.writeByte(0); settings.writeByte(0); settings.writeLFloat(0.0f);
+                            settings.writeBool(false); // client throttle enabled
+                            settings.writeByte(0);     // client throttle threshold
+                            settings.writeLFloat(0.0f);
 
                             Buffer batchOut;
                             batchOut.writeByte(0xfe);
@@ -620,7 +643,7 @@ int main(int argc, char* argv[]) {
                         res.writeByte(RakNet::UNCONNECTED_PONG);
                         res.writeLong(clientTime); res.writeLong(serverGuid);
                         res.writeBuffer(std::vector<uint8_t>(MAGIC, MAGIC + 16));
-                        std::string motd = "MCPE;SkinGetBE;" + std::to_string(fallbackProtocol) + ";" + fallbackVersion + ";0;100;" + std::to_string(serverGuid) + ";BedrockServer;Creative;1;19132;19132;";
+                        std::string motd = "MCPE;SkinGetBE;" + std::to_string(fallbackProtocol) + ";" + fallbackVersion + ";0;100;" + std::to_string(serverGuid) + ";SkinGetBE;Creative;1;19132;19132;";
                         res.writeShort((uint16_t)motd.length());
                         res.writeBuffer(std::vector<uint8_t>(motd.begin(), motd.end()));
                         server.send(res.data.data(), (int)res.data.size(), session->addr);
@@ -693,3 +716,5 @@ int main(int argc, char* argv[]) {
     }
     return 0;
 }
+
+
