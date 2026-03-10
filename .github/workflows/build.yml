@@ -1,11 +1,18 @@
-name: Multi-Platform Build
+name: Multi-Platform Build & Release
 
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
   pull_request:
     branches: [ main ]
+    paths-ignore:
+      - '**.md'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   build-windows:
@@ -16,10 +23,15 @@ jobs:
         run: cmake -B build -G "Visual Studio 17 2022" -A x64
       - name: Build
         run: cmake --build build --config Release
+      - name: Rename Executable
+        shell: pwsh
+        run: |
+          # 元のパスから指定の名前に変更
+          Move-Item "build/Release/SkinGetBE.exe" "build/Release/SkinGetBE.exe"
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SkinGetBE-Windows-x64
+          name: win-x64
           path: build/Release/SkinGetBE.exe
 
   build-linux-x64:
@@ -32,11 +44,13 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build build
+      - name: Rename Binary
+        run: mv build/SkinGetBE build/SkinGetBE_amd64
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SkinGetBE-Linux-x64
-          path: build/SkinGetBE
+          name: linux-x64
+          path: build/SkinGetBE_amd64
 
   build-linux-arm64:
     runs-on: ubuntu-latest
@@ -58,8 +72,33 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_TOOLCHAIN_FILE=arm64-toolchain.cmake
       - name: Build
         run: cmake --build build
+      - name: Rename Binary
+        run: mv build/SkinGetBE build/SkinGetBE_arm64
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SkinGetBE-Linux-ARM64
-          path: build/SkinGetBE
+          name: linux-arm64
+          path: build/SkinGetBE_arm64
+
+  create-release:
+    needs: [build-windows, build-linux-x64, build-linux-arm64]
+    runs-on: ubuntu-latest
+    # Push時、または手動実行時のみリリースを作成
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+          merge-multiple: true
+
+      - name: Create Release (Draft)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: Release v${{ github.run_number }}
+          draft: true
+          files: |
+            release_assets/SkinGetBE.exe
+            release_assets/SkinGetBE_amd64
+            release_assets/SkinGetBE_arm64
