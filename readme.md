@@ -187,6 +187,7 @@ SkinGetBE では、
 
 ## ライセンス
 
-MIT License（予定）
+MIT License
+
 
 
