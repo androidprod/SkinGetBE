@@ -6,7 +6,7 @@
 接続してくるクライアントから
 **スキンデータ（Skin / Cape / Geometry など）を取得・保存すること**を目的とした
 研究・開発向けプロジェクトです。
-※現時点ではSKin.pngのみ
+※現時点ではSkin.pngのみ
 
 本プロジェクトは公式 API や Mojang / Microsoft の認証基盤に依存せず、
 **RakNet + Bedrock Protocol の低レイヤ通信を C++ で直接実装**する点に特徴があります。
@@ -188,6 +188,7 @@ SkinGetBE では、
 ## ライセンス
 
 MIT License
+
 
 
 
