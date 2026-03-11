@@ -1,15 +1,16 @@
-name: Multi-Platform Build & Release
+name: Multi-Platform Build & Release (Manual)
 
 on:
-  push:
-    branches: [ main ]
-    paths-ignore:
-      - '**.md'
-  pull_request:
-    branches: [ main ]
-    paths-ignore:
-      - '**.md'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'リリースタグ名 (例: v1.2.3)'
+        required: true
+        default: 'v1.0.0'
+      release_title:
+        description: 'リリース文書のタイトル'
+        required: true
+        default: 'Release v1.0.0'
 
 permissions:
   contents: write
@@ -23,11 +24,6 @@ jobs:
         run: cmake -B build -G "Visual Studio 17 2022" -A x64
       - name: Build
         run: cmake --build build --config Release
-      - name: Rename Executable
-        shell: pwsh
-        run: |
-          # 元のパスから指定の名前に変更
-          Move-Item "build/Release/SkinGetBE.exe" "build/Release/SkinGetBE.exe"
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
@@ -83,8 +79,6 @@ jobs:
   create-release:
     needs: [build-windows, build-linux-x64, build-linux-arm64]
     runs-on: ubuntu-latest
-    # Push時、または手動実行時のみリリースを作成
-    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -95,8 +89,9 @@ jobs:
       - name: Create Release (Draft)
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.run_number }}
-          name: Release v${{ github.run_number }}
+          # 手動入力された値を直接使用
+          tag_name: ${{ github.event.inputs.tag_name }}
+          name: ${{ github.event.inputs.release_title }}
           draft: true
           files: |
             release_assets/SkinGetBE.exe
