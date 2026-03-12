@@ -22,6 +22,10 @@ set(PROJECT_SOURCES
     Util/Logger.cpp
 )
 
+if(WIN32)
+    list(APPEND PROJECT_SOURCES app.rc)
+endif()
+
 add_executable(SkinGetBE ${PROJECT_SOURCES})
 
 if(MSVC)
