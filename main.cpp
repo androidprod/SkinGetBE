@@ -139,39 +139,107 @@ static void writePNG(const std::string& path,
 
 using namespace RakNet;
 
-std::string fallbackVersion = "1.21.x";
-uint16_t fallbackProtocol = 766;
+std::string fallbackVersion = "";
+uint16_t fallbackProtocol = 0;
+bool useConfig = false;
+
+// PrismarineJS/minecraft-data の data/bedrock/version.json をもとに生成
+// 同一プロトコル番号に複数バージョンが対応する場合は "/" で結合
+static std::map<uint32_t, std::string> BEDROCK_PROTOCOL_MAP = {
+    {70,  "0.14.3"},
+    {82,  "0.15.6"},
+    {100, "1.0.0"},
+    {422, "1.16.201"},
+    {428, "1.16.210"},
+    {431, "1.16.220"},
+    {440, "1.17.0"},
+    {448, "1.17.10"},
+    {465, "1.17.30"},
+    {471, "1.17.40"},
+    {475, "1.18.0"},
+    {486, "1.18.11"},
+    {503, "1.18.30"},
+    {527, "1.19.1"},
+    {534, "1.19.10"},
+    {544, "1.19.20"},
+    {545, "1.19.21"},
+    {554, "1.19.30"},
+    {557, "1.19.40"},
+    {560, "1.19.50"},
+    {567, "1.19.60"},
+    {568, "1.19.63"},
+    {575, "1.19.70"},
+    {582, "1.19.80"},
+    {589, "1.20.0"},
+    {594, "1.20.10"},
+    {618, "1.20.30"},
+    {622, "1.20.40"},
+    {630, "1.20.50"},
+    {649, "1.20.61"},
+    {662, "1.20.71"},
+    {671, "1.20.80"},
+    {685, "1.21.0"},
+    {686, "1.21.2"},
+    {712, "1.21.20"},
+    {729, "1.21.30"},
+    {748, "1.21.42"},
+    {766, "1.21.50"},
+    {776, "1.21.60"},
+    {786, "1.21.70"},
+    {800, "1.21.80"},
+    {818, "1.21.90"},
+    {819, "1.21.93"},
+    {827, "1.21.100"},
+    {844, "1.21.111"},
+    {859, "1.21.120"},
+    {860, "1.21.124"},
+    {898, "1.21.130"},
+    {924, "1.26.0"},
+};
+
+static std::string resolveVersion(uint32_t protocol) {
+    auto it = BEDROCK_PROTOCOL_MAP.find(protocol);
+    if (it != BEDROCK_PROTOCOL_MAP.end()) return it->second;
+    Logger::warn("Unknown protocol: " + std::to_string(protocol) + ", using fallback");
+    return fallbackVersion;
+}
 
 void loadConfig() {
+    // まずマップの最新値をデフォルトにセット
+    if (!BEDROCK_PROTOCOL_MAP.empty()) {
+        auto newest = BEDROCK_PROTOCOL_MAP.rbegin();
+        fallbackProtocol = (uint16_t)newest->first;
+        fallbackVersion  = newest->second;
+    }
+
+    if (!useConfig) return;
+
     std::ifstream in("config.json");
     if (!in.good()) {
-        std::ofstream out("config.json");
-        out << "{\n  \"version\": \"1.21.x\",\n  \"protocol\": 766\n}\n";
-        out.close();
-        Logger::info("Created default config.json");
-    } else {
-        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        size_t vPos = content.find("\"version\"");
-        if (vPos != std::string::npos) {
-            size_t start = content.find_first_of("\"", content.find(":", vPos));
-            if (start != std::string::npos) {
-                size_t end = content.find_first_of("\"", start + 1);
-                if (end != std::string::npos) {
-                    fallbackVersion = content.substr(start + 1, end - start - 1);
-                }
-            }
-        }
-        size_t pPos = content.find("\"protocol\"");
-        if (pPos != std::string::npos) {
-            size_t startP = content.find_first_of("0123456789", content.find(":", pPos));
-            if (startP != std::string::npos) {
-                 size_t endP = startP;
-                 while(endP < content.length() && isdigit(content[endP])) endP++;
-                 fallbackProtocol = std::stoi(content.substr(startP, endP - startP));
-            }
-        }
-        Logger::info("Loaded config.json - Version: " + fallbackVersion + " Protocol: " + std::to_string(fallbackProtocol));
+        Logger::warn("Config loading enabled but config.json not found. Using defaults.");
+        return;
     }
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    size_t vPos = content.find("\"version\"");
+    if (vPos != std::string::npos) {
+        size_t start = content.find_first_of("\"", content.find(":", vPos));
+        if (start != std::string::npos) {
+            size_t end = content.find_first_of("\"", start + 1);
+            if (end != std::string::npos) {
+                fallbackVersion = content.substr(start + 1, end - start - 1);
+            }
+        }
+    }
+    size_t pPos = content.find("\"protocol\"");
+    if (pPos != std::string::npos) {
+        size_t startP = content.find_first_of("0123456789", content.find(":", pPos));
+        if (startP != std::string::npos) {
+            size_t endP = startP;
+            while(endP < content.length() && isdigit(content[endP])) endP++;
+            fallbackProtocol = (uint16_t)std::stoi(content.substr(startP, endP - startP));
+        }
+    }
+    Logger::info("Loaded config.json - Version: " + fallbackVersion + " Protocol: " + std::to_string(fallbackProtocol));
 }
 
 void showHelp() {
@@ -179,12 +247,13 @@ void showHelp() {
     Logger::info("Usage: SkinGetBE.exe [options]");
     Logger::info("Options:");
     Logger::info("  --debug             Enable verbose debug logging");
+    Logger::info("  --config            Enable loading version/protocol from config.json");
     Logger::info("  --filter <ip>       Filter communications to only specified IP address");
     Logger::info("Example: SkinGetBE.exe --filter 127.0.0.1 --debug");
     Logger::info("----------------------");
 }
 
-bool handleLogin(Buffer& buf) {
+uint32_t handleLogin(Buffer& buf) {
     Logger::info("Handling Bedrock Login Packet...");
     try {
         struct LoginFields {
@@ -216,7 +285,7 @@ bool handleLogin(Buffer& buf) {
         if (!parsed.has_value()) parsed = tryParseLogin(buf, true, false);
         if (!parsed.has_value()) parsed = tryParseLogin(buf, false, true);
         if (!parsed.has_value()) parsed = tryParseLogin(buf, true, true);
-        if (!parsed.has_value()) return false;
+        if (!parsed.has_value()) return 0;
         Logger::info("Client Protocol: " + std::to_string(parsed->protocol));
         std::string playerName = "UnknownPlayer";
         size_t searchPos = 0;
@@ -238,12 +307,12 @@ bool handleLogin(Buffer& buf) {
         }
         Logger::info("Detected Player: " + playerName);
         std::string skinJson = JWT::getPayload(parsed->skinJWT);
-        if (skinJson.empty()) return false;
+        if (skinJson.empty()) return 0;
         std::string skinId = JWT::getJsonValue(skinJson, "SkinId");
         std::string skinImage = JWT::getJsonValue(skinJson, "SkinData");
-        if (skinImage.empty()) return false;
+        if (skinImage.empty()) return 0;
         std::string skinRaw = Base64::decode(skinImage);
-        if (skinRaw.empty() || (skinRaw.size() % 4) != 0) return false;
+        if (skinRaw.empty() || (skinRaw.size() % 4) != 0) return 0;
         std::string widthStr = JWT::getJsonValue(skinJson, "SkinImageWidth");
         std::string heightStr = JWT::getJsonValue(skinJson, "SkinImageHeight");
         size_t pixels = skinRaw.size() / 4;
@@ -284,11 +353,11 @@ bool handleLogin(Buffer& buf) {
         }
         writePNG(targetPath, (const uint8_t*)skinRaw.data(), imgW, imgH);
         Logger::success(">>> Saved PNG: " + targetPath + " (" + std::to_string(imgW) + "x" + std::to_string(imgH) + ")");
-        return true;
+        return parsed->protocol;
     } catch (const std::exception& e) {
         Logger::error("Failed to parse login: " + std::string(e.what()));
     }
-    return false;
+    return 0;
 }
 
 struct SplitPacket {
@@ -298,13 +367,17 @@ struct SplitPacket {
     std::vector<bool>                 received;
 };
 
-struct ClientSession {
-    uint32_t packetSeq = 0;
-    uint32_t reliableSeq = 0;
-    uint32_t orderIndex = 0;
+    struct ClientSession {
+    uint32_t packetSeq    = 0;
+    uint32_t reliableSeq  = 0;
+    uint32_t orderIndex   = 0;
     std::map<uint16_t, SplitPacket> splitPackets;
     sockaddr_in addr;
-    std::mutex mtx; // Individual session mutex
+    std::mutex mtx;
+
+    uint8_t  raknetProtocol  = 11;
+    uint32_t bedrockProtocol = 0;
+    std::string bedrockVersion = "";
 };
 
 class ThreadPool {
@@ -431,17 +504,19 @@ int main(int argc, char* argv[]) {
                                                    
     )" << "\033[0m" << std::endl;
     Logger::info("SkinGetBE starting up (Multi-threaded)...");
-    loadConfig();
-    
     std::string filterIp = "";
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--debug" || arg == "-d" || arg == "/debug") {
             Logger::debugEnabled = true;
+        } else if (arg == "--config" || arg == "-c" || arg == "/config") {
+            useConfig = true;
         } else if (arg == "--filter" && i + 1 < argc) {
             filterIp = argv[++i];
         }
     }
+
+    loadConfig();
 
     showHelp();
     
@@ -467,6 +542,10 @@ int main(int argc, char* argv[]) {
     std::map<std::string, std::shared_ptr<ClientSession>> sessions;
     std::mutex sessionMtx;
 
+    // IP Cache for protocol detection across reconnections
+    std::map<std::string, uint32_t> ipProtocolCache;
+    std::mutex ipCacheMtx;
+
     auto getSession = [&](const sockaddr_in& addr) -> std::shared_ptr<ClientSession> {
         char key[64];
         sprintf(key, "%s:%d", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
@@ -485,18 +564,81 @@ int main(int argc, char* argv[]) {
     sockaddr_in clientAddr;
 
     while (true) {
+        Logger::debug("Waiting for packet...");
         int len = server.recv(recvBuf, sizeof(recvBuf), clientAddr);
+        if (len > 0) {
+            char hexId[8]; sprintf(hexId, "%02X", (uint8_t)recvBuf[0]);
+            char expectedId[8]; sprintf(expectedId, "%02X", (uint8_t)0x01); // RakNet::UNCONNECTED_PING
+            Logger::debug("Received len=" + std::to_string(len) + " from " + inet_ntoa(clientAddr.sin_addr) 
+                        + " [PacketID=0x" + std::string(hexId) + " expected=0x" + std::string(expectedId) + "]");
+        }
         if (len <= 0) continue;
 
         std::string clientIpStr = inet_ntoa(clientAddr.sin_addr);
         if (!filterIp.empty() && clientIpStr != filterIp) continue;
+
+        // Immediate MOTD response in main loop to prevent server list timeout
+        if (len > 0 && (uint8_t)recvBuf[0] == 0x01) { // 0x01 = UNCONNECTED_PING
+            Logger::debug("PING handler triggered!");
+            try {
+                Buffer buf(std::vector<uint8_t>(recvBuf, recvBuf + len));
+                buf.readByte(); // packetId
+
+                if (buf.data.size() < 1 + 8 + 16) {
+                    Logger::warn("UNCONNECTED_PING too short, skipping");
+                    continue;
+                }
+
+                uint64_t clientTime = buf.readLong();
+                buf.offset += 16; // magic
+                uint64_t serverGuid = 0x1234567812345678;
+
+                uint32_t proto = fallbackProtocol;
+                std::string ver = fallbackVersion;
+                {
+                    std::lock_guard<std::mutex> lock(ipCacheMtx);
+                    auto it = ipProtocolCache.find(clientIpStr);
+                    if (it != ipProtocolCache.end()) {
+                        proto = it->second;
+                        ver = resolveVersion(proto);
+                    }
+                }
+
+                // Dynamic MOTD Cycling (5 seconds interval)
+                uint64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                    std::chrono::system_clock::now().time_since_epoch()
+                ).count();
+                int stage = (int)((now / 5) % 3);
+                std::string motdTitle;
+                switch (stage) {
+                    // case 0:  motdTitle = "SkinGetBE / Version: " + ver; break;
+                    // case 1:  motdTitle = "SkinGetBE / Protocol: " + std::to_string(proto); break;
+                    case 0:  motdTitle = "Skin acquisition software!!"; break;
+                    case 1:  motdTitle = "SkinGetBE"; break;
+                    default: motdTitle = "Created by androidprod"; break;
+                }
+
+                Buffer res;
+                res.writeByte(RakNet::UNCONNECTED_PONG);
+                res.writeLong(clientTime); res.writeLong(serverGuid);
+                res.writeBuffer(std::vector<uint8_t>(MAGIC, MAGIC + 16));
+
+                std::string motd = "MCPE;" + motdTitle + ";" + std::to_string(proto) + ";" + ver + ";0;100;" + std::to_string(serverGuid) + ";SkinGetBE;Creative;1;19132;19132;";
+                res.writeShort((uint16_t)motd.length());
+                res.writeBuffer(std::vector<uint8_t>(motd.begin(), motd.end()));
+                server.send(res.data.data(), (int)res.data.size(), clientAddr);
+            } catch (const std::exception& e) {
+                Logger::error("UNCONNECTED_PING error: " + std::string(e.what()));
+            }
+            continue;
+        }
 
         // Copy buffer for thread safety if passed to pool
         std::vector<uint8_t> packetData(recvBuf, recvBuf + len);
         auto session = getSession(clientAddr);
 
         // Use thread pool for complex packet processing
-        pool.enqueue([packetData, session, &server]() {
+        pool.enqueue([packetData, session, &server, &ipProtocolCache, &ipCacheMtx]() {
             std::lock_guard<std::mutex> sessionLock(session->mtx);
             try {
                 Buffer buf(packetData);
@@ -555,7 +697,12 @@ int main(int argc, char* argv[]) {
                         uint32_t gId = batch.readVarInt();
 
                         if (gId == Bedrock::LOGIN) {
-                            if (handleLogin(batch)) {
+                            uint32_t detectedProtocol = handleLogin(batch);
+                            if (detectedProtocol != 0) {
+                                session->bedrockProtocol = detectedProtocol;
+                                session->bedrockVersion  = resolveVersion(detectedProtocol);
+                                Logger::success("Version confirmed: " + session->bedrockVersion + " (proto=" + std::to_string(detectedProtocol) + ")");
+
                                 // Prepare PlayStatus (LOGIN_SUCCESS)
                                 Buffer playStatus;
                                 playStatus.writeVarInt(Bedrock::PLAY_STATUS);
@@ -586,6 +733,23 @@ int main(int argc, char* argv[]) {
                                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
                             }
                         } else if (gId == Bedrock::REQUEST_NETWORK_SETTINGS) {
+                            // Extract client protocol number (Big Endian 4bytes)
+                            uint32_t clientProtocol = 0;
+                            if (batch.offset + 4 <= batch.data.size()) {
+                                clientProtocol = batch.readInt();
+                            }
+
+                            if (clientProtocol != 0) {
+                                std::string clientIp = inet_ntoa(session->addr.sin_addr);
+                                {
+                                    std::lock_guard<std::mutex> lock(ipCacheMtx);
+                                    ipProtocolCache[clientIp] = clientProtocol;
+                                }
+                                session->bedrockProtocol = clientProtocol;
+                                session->bedrockVersion = resolveVersion(clientProtocol);
+                                Logger::info("RequestNetworkSettings proto=" + std::to_string(clientProtocol) + " (" + session->bedrockVersion + ")");
+                            }
+
                             // Reverting to the exact format that worked previously
                             Buffer settings;
                             settings.writeVarInt(Bedrock::NETWORK_SETTINGS);
@@ -635,22 +799,12 @@ int main(int argc, char* argv[]) {
 
                 // RakNet Handlers
                 switch (packetId) {
-                    case RakNet::UNCONNECTED_PING: {
-                        uint64_t clientTime = buf.readLong();
-                        buf.offset += 16;
-                        uint64_t serverGuid = 0x1234567812345678;
-                        Buffer res;
-                        res.writeByte(RakNet::UNCONNECTED_PONG);
-                        res.writeLong(clientTime); res.writeLong(serverGuid);
-                        res.writeBuffer(std::vector<uint8_t>(MAGIC, MAGIC + 16));
-                        std::string motd = "MCPE;SkinGetBE;" + std::to_string(fallbackProtocol) + ";" + fallbackVersion + ";0;100;" + std::to_string(serverGuid) + ";SkinGetBE;Creative;1;19132;19132;";
-                        res.writeShort((uint16_t)motd.length());
-                        res.writeBuffer(std::vector<uint8_t>(motd.begin(), motd.end()));
-                        server.send(res.data.data(), (int)res.data.size(), session->addr);
-                        break;
-                    }
                     case RakNet::OPEN_CONNECTION_REQUEST_1: {
                         session->packetSeq = 0; session->reliableSeq = 0; session->orderIndex = 0; session->splitPackets.clear();
+                        if (packetData.size() > 17) {
+                            session->raknetProtocol = packetData[17];
+                            Logger::debug("RakNet Protocol: " + std::to_string(session->raknetProtocol));
+                        }
                         Buffer res;
                         res.writeByte(RakNet::OPEN_CONNECTION_REPLY_1);
                         res.writeBuffer(std::vector<uint8_t>(MAGIC, MAGIC + 16));
@@ -714,6 +868,7 @@ int main(int argc, char* argv[]) {
             }
         });
     }
+
     return 0;
 }
 
