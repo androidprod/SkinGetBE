@@ -5,6 +5,7 @@
 #include <cstring>
 #include <cstdio>
 #ifdef _WIN32
+    #include <windows.h>
     #include <direct.h>   // _mkdir on Windows
 #else
     #include <sys/stat.h> // mkdir on Linux
@@ -12,6 +13,7 @@
     #include <arpa/inet.h>
     #include <netdb.h>
     #include <unistd.h>
+    #include <limits.h>
     #define _mkdir(name) mkdir(name, 0777)
 #endif
 #include <zlib.h>
@@ -21,6 +23,7 @@
 #include "Crypto/JWT.h"
 #include "Util/Buffer.h"
 #include "Util/Logger.h"
+#include "Util/Json.h"
 #include <thread>
 #include <mutex>
 #include <queue>
@@ -141,7 +144,23 @@ using namespace RakNet;
 
 std::string fallbackVersion = "";
 uint16_t fallbackProtocol = 0;
-bool useConfig = false;
+uint16_t serverPort = 19132;
+std::string exeDir = ".";
+bool useConfig = true; // Enabled by default now
+
+static std::string getExecutableDir() {
+    char buffer[1024];
+#ifdef _WIN32
+    GetModuleFileNameA(NULL, buffer, sizeof(buffer));
+#else
+    ssize_t count = readlink("/proc/self/exe", buffer, sizeof(buffer));
+    if (count <= 0) return ".";
+    buffer[count] = '\0';
+#endif
+    std::string path(buffer);
+    size_t pos = path.find_last_of("\\/");
+    return (pos != std::string::npos) ? path.substr(0, pos) : ".";
+}
 
 // PrismarineJS/minecraft-data の data/bedrock/version.json をもとに生成
 // 同一プロトコル番号に複数バージョンが対応する場合は "/" で結合
@@ -205,41 +224,61 @@ static std::string resolveVersion(uint32_t protocol) {
 }
 
 void loadConfig() {
-    // まずマップの最新値をデフォルトにセット
+    // 1. Set initial defaults from protocol map
     if (!BEDROCK_PROTOCOL_MAP.empty()) {
         auto newest = BEDROCK_PROTOCOL_MAP.rbegin();
         fallbackProtocol = (uint16_t)newest->first;
         fallbackVersion  = newest->second;
     }
 
-    if (!useConfig) return;
+    std::string configPath = exeDir + "/config.json";
+    
+    // 2. If config doesn't exist, create it with current defaults
+    std::ifstream check(configPath);
+    if (!check.good()) {
+        Logger::info("Generating default config.json at: " + configPath);
+        std::ofstream out(configPath);
+        if (out) {
+            out << "{\n";
+            out << "  \"version\": \"" << fallbackVersion << "\",\n";
+            out << "  \"protocol\": " << fallbackProtocol << ",\n";
+            out << "  \"port\": " << serverPort << "\n";
+            out << "}\n";
+            out.close();
+        } else {
+            Logger::error("Failed to create default config.json!");
+        }
+    } else {
+        check.close();
+    }
 
-    std::ifstream in("config.json");
-    if (!in.good()) {
-        Logger::warn("Config loading enabled but config.json not found. Using defaults.");
-        return;
-    }
-    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    size_t vPos = content.find("\"version\"");
-    if (vPos != std::string::npos) {
-        size_t start = content.find_first_of("\"", content.find(":", vPos));
-        if (start != std::string::npos) {
-            size_t end = content.find_first_of("\"", start + 1);
-            if (end != std::string::npos) {
-                fallbackVersion = content.substr(start + 1, end - start - 1);
+    // 3. Load from config.json
+    std::ifstream in(configPath);
+    if (in.good()) {
+        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        in.close();
+        
+        try {
+            Util::JsonValue json = Util::JsonParser::parse(content);
+            if (json.type == Util::JOBJECT) {
+                if (json.obj.count("version") && json.obj["version"].type == Util::JSTRING) {
+                    fallbackVersion = json.obj["version"].s;
+                }
+                if (json.obj.count("protocol") && json.obj["protocol"].type == Util::JNUMBER) {
+                    fallbackProtocol = (uint16_t)json.obj["protocol"].n;
+                }
+                if (json.obj.count("port") && json.obj["port"].type == Util::JNUMBER) {
+                    serverPort = (uint16_t)json.obj["port"].n;
+                }
             }
+        } catch (const std::exception& e) {
+            Logger::warn("Failed to parse config.json: " + std::string(e.what()));
         }
     }
-    size_t pPos = content.find("\"protocol\"");
-    if (pPos != std::string::npos) {
-        size_t startP = content.find_first_of("0123456789", content.find(":", pPos));
-        if (startP != std::string::npos) {
-            size_t endP = startP;
-            while(endP < content.length() && isdigit(content[endP])) endP++;
-            fallbackProtocol = (uint16_t)std::stoi(content.substr(startP, endP - startP));
-        }
-    }
-    Logger::info("Loaded config.json - Version: " + fallbackVersion + " Protocol: " + std::to_string(fallbackProtocol));
+    Logger::info("Configuration Loaded:");
+    Logger::info(" - Version:  " + fallbackVersion);
+    Logger::info(" - Protocol: " + std::to_string(fallbackProtocol));
+    Logger::info(" - Port:     " + std::to_string(serverPort));
 }
 
 void showHelp() {
@@ -342,14 +381,17 @@ uint32_t handleLogin(Buffer& buf) {
         };
         playerName = sanitize(playerName);
         skinId = sanitize(skinId);
-        _mkdir("skins");
+        
+        std::string skinsDir = exeDir + "/skins";
+        _mkdir(skinsDir.c_str());
+        
         std::string baseName = playerName + "_" + skinId;
-        std::string targetPath = "skins/" + baseName + ".png";
+        std::string targetPath = skinsDir + "/" + baseName + ".png";
         int count = 1;
         while (true) {
             std::ifstream f(targetPath);
             if (!f.good()) break;
-            targetPath = "skins/" + baseName + "_" + std::to_string(count++) + ".png";
+            targetPath = skinsDir + "/" + baseName + "_" + std::to_string(count++) + ".png";
         }
         writePNG(targetPath, (const uint8_t*)skinRaw.data(), imgW, imgH);
         Logger::success(">>> Saved PNG: " + targetPath + " (" + std::to_string(imgW) + "x" + std::to_string(imgH) + ")");
@@ -494,6 +536,10 @@ static std::string discoverExternalIP(SOCKET serverSock) {
 int main(int argc, char* argv[]) {
     srand((unsigned int)time(nullptr));
     Logger::init();
+    
+    // Initialize executable directory
+    exeDir = getExecutableDir();
+
     std::cout << "\033[1;36m" << R"(
    _____ _    _      _____      _   ____  ______ 
   / ____| |  (_)    / ____|    | | |  _ \|  ____|
@@ -504,6 +550,8 @@ int main(int argc, char* argv[]) {
                                                    
     )" << "\033[0m" << std::endl;
     Logger::info("SkinGetBE starting up (Multi-threaded)...");
+    Logger::info("Working Directory (Exe): " + exeDir);
+
     std::string filterIp = "";
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
@@ -522,7 +570,7 @@ int main(int argc, char* argv[]) {
     
     UDP server;
     try {
-        server.listen(19132);
+        server.listen(serverPort);
     } catch (const std::exception& e) {
         Logger::error(e.what());
         return 1;
@@ -532,7 +580,7 @@ int main(int argc, char* argv[]) {
     Logger::info("Attempting NAT discovery (STUN)...");
     std::string extIP = discoverExternalIP(server.sock);
     Logger::success("External IP detected: " + extIP);
-    Logger::info("Note: Ensure UDP Port 19132 is open on your router if not reachable.");
+    Logger::info("Note: Ensure UDP Port " + std::to_string(serverPort) + " is open on your router if not reachable.");
 
     if (!filterIp.empty()) {
         Logger::info("Filter rules applied: " + filterIp);
@@ -623,7 +671,8 @@ int main(int argc, char* argv[]) {
                 res.writeLong(clientTime); res.writeLong(serverGuid);
                 res.writeBuffer(std::vector<uint8_t>(MAGIC, MAGIC + 16));
 
-                std::string motd = "MCPE;" + motdTitle + ";" + std::to_string(proto) + ";" + ver + ";0;100;" + std::to_string(serverGuid) + ";SkinGetBE;Creative;1;19132;19132;";
+                std::string portStr = std::to_string(serverPort);
+                std::string motd = "MCPE;" + motdTitle + ";" + std::to_string(proto) + ";" + ver + ";0;100;" + std::to_string(serverGuid) + ";SkinGetBE;Creative;1;" + portStr + ";" + portStr + ";";
                 res.writeShort((uint16_t)motd.length());
                 res.writeBuffer(std::vector<uint8_t>(motd.begin(), motd.end()));
                 server.send(res.data.data(), (int)res.data.size(), clientAddr);
