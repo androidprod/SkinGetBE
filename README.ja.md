@@ -12,7 +12,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Linux%20%7C%20ARM64-lightgrey?style=flat-square)](#ビルド方法)
 [![Protocol](https://img.shields.io/badge/Bedrock%20Protocol-924%20(1.26.0)-green?style=flat-square)](#設定)
 
-[English](README.en.md) | **日本語**
+[English](README.md) | **日本語**
 
 </div>
 
