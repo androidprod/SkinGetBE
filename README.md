@@ -67,7 +67,6 @@ No Mojang/Microsoft APIs or Xbox authentication infrastructure required. Everyth
 | Cape image extraction | Present in Login JWT but not yet parsed |
 | Geometry JSON saving | Skin shape/animation data |
 | Encrypted connection support | Required for Xbox Live connections |
-| Automatic Bedrock version detection | Currently configured via config.json |
 
 ---
 
