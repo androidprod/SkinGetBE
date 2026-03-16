@@ -10,7 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-blue?style=flat-square&logo=cplusplus)](https://isocpp.org/)
 [![Platform](https://img.shields.io/badge/Platform-Win%20%7C%20Linux%20%7C%20ARM64-lightgrey?style=flat-square)](#building)
-[![Protocol](https://img.shields.io/badge/Bedrock%20Protocol-924%20(1.26.0)-green?style=flat-square)](#configuration)
+[![Protocol](https://img.shields.io/badge/Bedrock%20Protocol-Dynamic%20Version-green?style=flat-square)](#configuration)
 
 **English** | [日本語](README.ja.md)
 
