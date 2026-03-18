@@ -218,12 +218,13 @@ skins/
 
 ## Configuration
 
-Edit `config.json` to target a specific Bedrock version's protocol number:
+Edit `config.json` to target a specific Bedrock version's protocol number and port:
 
 ```json
 {
   "version": "1.26.0",
-  "protocol": 924
+  "protocol": 924,
+  "port": 19132
 }
 ```
 
