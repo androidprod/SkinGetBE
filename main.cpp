@@ -1,4 +1,4 @@
-#include <iostream>
+﻿#include <iostream>
 #include <vector>
 #include <fstream>
 #include <map>
@@ -33,16 +33,19 @@
 #include <thread>
 #include <mutex>
 #include <queue>
+#include <unordered_set>
 #include <condition_variable>
 #include <functional>
 #include <chrono>
 #include <memory>
+#include <cctype>
 #include <future>
 #include <ctime>
 #include <optional>
+#include <atomic>
 
-// zlib raw deflate decompression (BE 1.20.30+ batch format)
-// algo byte 0x00 竊・raw deflate (no zlib 0x78 header)
+// zlib raw deflate decompression (Bedrock バッチ形式: BE 1.20.30+)
+// アルゴリズムバイト 0x00 は raw deflate を示す（標準 zlib ヘッダー 0x78 を含まない生の deflate データ）
 static std::vector<uint8_t> zlibDecompress(const uint8_t* src, size_t srcLen) {
     std::vector<uint8_t> out;
     out.resize(srcLen * 4 + 1024);
@@ -91,10 +94,12 @@ static std::vector<uint8_t> zlibCompress(const uint8_t* src, size_t srcLen, int 
     return tmp;
 }
 
-// 繝溘ル繝槭ΝPNG繧ｨ繝ｳ繧ｳ繝ｼ繝繝ｼ (zlib縺ｮcompress2繧貞茜逕ｨ)
+// RGBA バッファから PNG ファイルを書き出す処理
+// IDAT チャンクは zlib の compress2 を使って圧縮する（標準 zlib ヘッダー付き、圧縮レベル6）
 static void writePNG(const std::string& path,
                      const uint8_t* rgba, int w, int h) {
-    // 蜷・・ｽ・ｽ繧ｭ繝｣繝ｳ繝ｩ繧､繝ｳ縺ｫ filter byte 0 (繝輔ぅ繝ｫ繧ｿ縺ｪ縺・ 繧剃ｻ倅ｸ・
+    // 各スキャンラインの先頭にフィルタバイトを挿入する（ここではフィルタタイプ0: None）
+    // その後に各ピクセルの RGBA データが続く
     std::vector<uint8_t> raw;
     raw.reserve((size_t)(1 + w * 4) * h);
     for (int y = 0; y < h; y++) {
@@ -147,9 +152,7 @@ static void writePNG(const std::string& path,
 }
 
 using namespace RakNet;
-
-std::string fallbackVersion = "";
-uint16_t fallbackProtocol = 0;
+#include "Bedrock/Version.h"
 uint16_t serverPort = 19132;
 std::string exeDir = ".";
 bool useConfig = true; // Enabled by default now
@@ -168,74 +171,10 @@ static std::string getExecutableDir() {
     return (pos != std::string::npos) ? path.substr(0, pos) : ".";
 }
 
-// PrismarineJS/minecraft-data の data/bedrock/version.json をもとに生成
-// 同一プロトコル番号に複数バージョンが対応する場合は "/" で結合
-static std::map<uint32_t, std::string> BEDROCK_PROTOCOL_MAP = {
-    {70,  "0.14.3"},
-    {82,  "0.15.6"},
-    {100, "1.0.0"},
-    {422, "1.16.201"},
-    {428, "1.16.210"},
-    {431, "1.16.220"},
-    {440, "1.17.0"},
-    {448, "1.17.10"},
-    {465, "1.17.30"},
-    {471, "1.17.40"},
-    {475, "1.18.0"},
-    {486, "1.18.11"},
-    {503, "1.18.30"},
-    {527, "1.19.1"},
-    {534, "1.19.10"},
-    {544, "1.19.20"},
-    {545, "1.19.21"},
-    {554, "1.19.30"},
-    {557, "1.19.40"},
-    {560, "1.19.50"},
-    {567, "1.19.60"},
-    {568, "1.19.63"},
-    {575, "1.19.70"},
-    {582, "1.19.80"},
-    {589, "1.20.0"},
-    {594, "1.20.10"},
-    {618, "1.20.30"},
-    {622, "1.20.40"},
-    {630, "1.20.50"},
-    {649, "1.20.61"},
-    {662, "1.20.71"},
-    {671, "1.20.80"},
-    {685, "1.21.0"},
-    {686, "1.21.2"},
-    {712, "1.21.20"},
-    {729, "1.21.30"},
-    {748, "1.21.42"},
-    {766, "1.21.50"},
-    {776, "1.21.60"},
-    {786, "1.21.70"},
-    {800, "1.21.80"},
-    {818, "1.21.90"},
-    {819, "1.21.93"},
-    {827, "1.21.100"},
-    {844, "1.21.111"},
-    {859, "1.21.120"},
-    {860, "1.21.124"},
-    {898, "1.21.130"},
-    {924, "1.26.0"},
-};
-
-static std::string resolveVersion(uint32_t protocol) {
-    auto it = BEDROCK_PROTOCOL_MAP.find(protocol);
-    if (it != BEDROCK_PROTOCOL_MAP.end()) return it->second;
-    Logger::warn("Unknown protocol: " + std::to_string(protocol) + ", using fallback");
-    return fallbackVersion;
-}
-
 void loadConfig() {
-    // 1. Set initial defaults from protocol map
-    if (!BEDROCK_PROTOCOL_MAP.empty()) {
-        auto newest = BEDROCK_PROTOCOL_MAP.rbegin();
-        fallbackProtocol = (uint16_t)newest->first;
-        fallbackVersion  = newest->second;
-    }
+    // 1. Set initial defaults from Bedrock version module
+    uint16_t cfgFallbackProtocol = Bedrock::getLatestProtocol();
+    std::string cfgFallbackVersion = Bedrock::getLatestVersion();
 
     std::string configPath = exeDir + "/config.json";
     
@@ -246,8 +185,8 @@ void loadConfig() {
         std::ofstream out(configPath);
         if (out) {
             out << "{\n";
-            out << "  \"version\": \"" << fallbackVersion << "\",\n";
-            out << "  \"protocol\": " << fallbackProtocol << ",\n";
+            out << "  \"version\": \"" << cfgFallbackVersion << "\",\n";
+            out << "  \"protocol\": " << cfgFallbackProtocol << ",\n";
             out << "  \"port\": " << serverPort << "\n";
             out << "}\n";
             out.close();
@@ -268,10 +207,10 @@ void loadConfig() {
             Util::JsonValue json = Util::JsonParser::parse(content);
             if (json.type == Util::JOBJECT) {
                 if (json.obj.count("version") && json.obj["version"].type == Util::JSTRING) {
-                    fallbackVersion = json.obj["version"].s;
+                    Bedrock::setFallbackVersion(json.obj["version"].s);
                 }
                 if (json.obj.count("protocol") && json.obj["protocol"].type == Util::JNUMBER) {
-                    fallbackProtocol = (uint16_t)json.obj["protocol"].n;
+                    Bedrock::setFallbackProtocol((uint16_t)json.obj["protocol"].n);
                 }
                 if (json.obj.count("port") && json.obj["port"].type == Util::JNUMBER) {
                     serverPort = (uint16_t)json.obj["port"].n;
@@ -282,23 +221,46 @@ void loadConfig() {
         }
     }
     Logger::info("Configuration Loaded:");
-    Logger::info(" - Version:  " + fallbackVersion);
-    Logger::info(" - Protocol: " + std::to_string(fallbackProtocol));
+    Logger::info(" - Version:  " + Bedrock::getLatestVersion());
+    Logger::info(" - Protocol: " + std::to_string(Bedrock::getLatestProtocol()));
     Logger::info(" - Port:     " + std::to_string(serverPort));
 }
 
 void showHelp() {
-    Logger::info("--- SkinGetBE Help ---");
     Logger::info("Usage: SkinGetBE.exe [options]");
     Logger::info("Options:");
     Logger::info("  --debug             Enable verbose debug logging");
     Logger::info("  --config            Enable loading version/protocol from config.json");
-    Logger::info("  --filter <ip>       Filter communications to only specified IP address");
-    Logger::info("Example: SkinGetBE.exe --filter 127.0.0.1 --debug");
-    Logger::info("----------------------");
+    Logger::info("  --filter <name>     Filter displayed players by name (substring match)");
+    Logger::info("  --logs              Show medium verbosity logs (info + extra)");
+    Logger::info("Example: SkinGetBE.exe --filter Steve --logs");
 }
 
-uint32_t handleLogin(Buffer& buf) {
+uint32_t handleLogin(Buffer& buf, struct ClientSession* session = nullptr);
+
+struct SplitPacket {
+    uint32_t count        = 0;
+    uint32_t receivedCount = 0;
+    std::vector<std::vector<uint8_t>> fragments;
+    std::vector<bool>                 received;
+};
+
+    struct ClientSession {
+    uint32_t packetSeq    = 0;
+    uint32_t reliableSeq  = 0;
+    uint32_t orderIndex   = 0;
+    std::map<uint16_t, SplitPacket> splitPackets;
+    sockaddr_in addr;
+    std::mutex mtx;
+
+    uint8_t  raknetProtocol  = 11;
+    uint32_t bedrockProtocol = 0;
+    std::string bedrockVersion = "";
+    std::string playerName = "";
+    bool skinSaved = false;
+};
+
+uint32_t handleLogin(Buffer& buf, struct ClientSession* session) {
     Logger::info("Handling Bedrock Login Packet...");
     try {
         struct LoginFields {
@@ -382,7 +344,7 @@ uint32_t handleLogin(Buffer& buf) {
             }
         }
         auto sanitize = [](std::string s) {
-            for (auto& c : s) if (c=='/' || c=='\\' || c==':' || c=='*' || c=='?' || c=='\"' || c=='<' || c=='>' || c=='|') c='_';
+            for (auto& c : s) if (c=='/' || c=='\\' || c==':' || c=='*' || c=='?' || c=='"' || c=='<' || c=='>' || c=='|') c='_';
             return s;
         };
         playerName = sanitize(playerName);
@@ -401,32 +363,22 @@ uint32_t handleLogin(Buffer& buf) {
         }
         writePNG(targetPath, (const uint8_t*)skinRaw.data(), imgW, imgH);
         Logger::success(">>> Saved PNG: " + targetPath + " (" + std::to_string(imgW) + "x" + std::to_string(imgH) + ")");
+        // Also log an explicit info-level confirmation so default (no flags) shows it
+        Logger::info("Skin saved: " + targetPath);
+
+        if (session) {
+            // Note: the caller may already hold session->mtx (e.g. packet dispatcher).
+            // Do not attempt to lock here to avoid deadlock; assign fields directly.
+            session->playerName = playerName;
+            session->skinSaved = true;
+        }
+
         return parsed->protocol;
     } catch (const std::exception& e) {
         Logger::error("Failed to parse login: " + std::string(e.what()));
     }
     return 0;
 }
-
-struct SplitPacket {
-    uint32_t count        = 0;
-    uint32_t receivedCount = 0;
-    std::vector<std::vector<uint8_t>> fragments;
-    std::vector<bool>                 received;
-};
-
-    struct ClientSession {
-    uint32_t packetSeq    = 0;
-    uint32_t reliableSeq  = 0;
-    uint32_t orderIndex   = 0;
-    std::map<uint16_t, SplitPacket> splitPackets;
-    sockaddr_in addr;
-    std::mutex mtx;
-
-    uint8_t  raknetProtocol  = 11;
-    uint32_t bedrockProtocol = 0;
-    std::string bedrockVersion = "";
-};
 
 class ThreadPool {
 public:
@@ -546,6 +498,9 @@ int main(int argc, char* argv[]) {
     // Initialize executable directory
     exeDir = getExecutableDir();
 
+    // Parse arguments early so --help can exit before printing startup/config logs
+    std::string filterName = "";
+
     std::cout << "\033[1;36m" << R"(
    _____ _    _      _____      _   ____  ______ 
   / ____| |  (_)    / ____|    | | |  _ \|  ____|
@@ -555,24 +510,35 @@ int main(int argc, char* argv[]) {
   |_____/|_|\_\_|_| |_|\_____|\___|\__|____/|______|
                                                    
     )" << "\033[0m" << std::endl;
-    Logger::info("SkinGetBE starting up (Multi-threaded)...");
-    Logger::info("Working Directory (Exe): " + exeDir);
 
-    std::string filterIp = "";
+    bool showLogs = false;
+    bool showHelpFlag = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "--debug" || arg == "-d" || arg == "/debug") {
             Logger::debugEnabled = true;
+            Logger::setLevel(Logger::LVL_DEBUG);
         } else if (arg == "--config" || arg == "-c" || arg == "/config") {
             useConfig = true;
+        } else if (arg == "--logs") {
+            showLogs = true;
+            Logger::setLevel(Logger::LVL_VERBOSE);
+        } else if (arg == "--help" || arg == "-h" || arg == "/?" || arg == "/help") {
+            showHelpFlag = true;
         } else if (arg == "--filter" && i + 1 < argc) {
-            filterIp = argv[++i];
+            filterName = argv[++i];
         }
     }
 
-    loadConfig();
+    if (showHelpFlag) {
+        showHelp();
+        return 0;
+    }
 
-    showHelp();
+    Logger::info("SkinGetBE starting up...");
+    Logger::info("Working Directory: " + exeDir);
+
+    loadConfig();
     
     UDP server;
     try {
@@ -588,13 +554,24 @@ int main(int argc, char* argv[]) {
     Logger::success("External IP detected: " + extIP);
     Logger::info("Note: Ensure UDP Port " + std::to_string(serverPort) + " is open on your router if not reachable.");
 
-    if (!filterIp.empty()) {
-        Logger::info("Filter rules applied: " + filterIp);
+    if (!filterName.empty()) {
+        Logger::info("Player name filter applied: " + filterName);
+    }
+
+    // Default behavior: use log output. Terminal UI removed.
+    if (showLogs) {
+        // already set to VERBOSE above
+    } else {
+        // Default: show essential info (startup, connections, saves)
+        Logger::setLevel(Logger::LVL_INFO);
     }
 
     ThreadPool pool(std::thread::hardware_concurrency());
     std::map<std::string, std::shared_ptr<ClientSession>> sessions;
     std::mutex sessionMtx;
+
+    // Terminal UI removed: table rendering and related background thread were
+    // removed to improve stability. The program now uses log output only.
 
     // IP Cache for protocol detection across reconnections
     std::map<std::string, uint32_t> ipProtocolCache;
@@ -629,7 +606,6 @@ int main(int argc, char* argv[]) {
         if (len <= 0) continue;
 
         std::string clientIpStr = inet_ntoa(clientAddr.sin_addr);
-        if (!filterIp.empty() && clientIpStr != filterIp) continue;
 
         // Immediate MOTD response in main loop to prevent server list timeout
         if (len > 0 && (uint8_t)recvBuf[0] == 0x01) { // 0x01 = UNCONNECTED_PING
@@ -647,14 +623,14 @@ int main(int argc, char* argv[]) {
                 buf.offset += 16; // magic
                 uint64_t serverGuid = 0x1234567812345678;
 
-                uint32_t proto = fallbackProtocol;
-                std::string ver = fallbackVersion;
+                uint32_t proto = Bedrock::getLatestProtocol();
+                std::string ver = Bedrock::getLatestVersion();
                 {
                     std::lock_guard<std::mutex> lock(ipCacheMtx);
                     auto it = ipProtocolCache.find(clientIpStr);
                     if (it != ipProtocolCache.end()) {
                         proto = it->second;
-                        ver = resolveVersion(proto);
+                        ver = Bedrock::resolveVersion(proto);
                     }
                 }
 
@@ -720,7 +696,9 @@ int main(int argc, char* argv[]) {
                     bool useZlib = false;
                     if (algo == 0x00) {
                         inner.offset++;
-                        useZlib = true; // client is using zlib 竊・we must also use zlib for responses
+                        // クライアントが raw deflate（zlib無しの生 deflate）を使用しているため
+                        // こちらもバッチ応答を raw deflate で作成する必要がある
+                        useZlib = true;
                         batchRaw = zlibDecompress(inner.data.data() + inner.offset, inner.data.size() - inner.offset);
                     } else if (algo == 0xFF) {
                         inner.offset++;
@@ -752,10 +730,10 @@ int main(int argc, char* argv[]) {
                         uint32_t gId = batch.readVarInt();
 
                         if (gId == Bedrock::LOGIN) {
-                            uint32_t detectedProtocol = handleLogin(batch);
+                            uint32_t detectedProtocol = handleLogin(batch, session.get());
                             if (detectedProtocol != 0) {
                                 session->bedrockProtocol = detectedProtocol;
-                                session->bedrockVersion  = resolveVersion(detectedProtocol);
+                                session->bedrockVersion  = Bedrock::resolveVersion(detectedProtocol);
                                 Logger::success("Version confirmed: " + session->bedrockVersion + " (proto=" + std::to_string(detectedProtocol) + ")");
 
                                 // Prepare PlayStatus (LOGIN_SUCCESS)
@@ -781,11 +759,18 @@ int main(int argc, char* argv[]) {
                                 combined.writeBuffer(disc.data);
 
                                 // Send the combined batch
+                                Logger::debug("Sending combined batch: playStatus=" + std::to_string((int)playStatus.data.size()) + ", disconnect=" + std::to_string((int)disc.data.size()) + ", combined=" + std::to_string((int)combined.data.size()));
                                 sendFrame(makeBatch(combined.data), 3, true);
                                 Logger::success("Sent bundled PlayStatus + Disconnect to client.");
+                                // Explicit info-level log for disconnect target
+                                {
+                                    char addrbuf[64]; sprintf(addrbuf, "%s:%d", inet_ntoa(session->addr.sin_addr), ntohs(session->addr.sin_port));
+                                    Logger::info(std::string("Disconnect sent to ") + addrbuf);
+                                }
 
                                 // Allow time for delivery before potential connection end
-                                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                                // Increased from 100ms to 500ms to reduce chance of packet loss
+                                std::this_thread::sleep_for(std::chrono::milliseconds(500));
                             }
                         } else if (gId == Bedrock::REQUEST_NETWORK_SETTINGS) {
                             // Extract client protocol number (Big Endian 4bytes)
@@ -801,7 +786,7 @@ int main(int argc, char* argv[]) {
                                     ipProtocolCache[clientIp] = clientProtocol;
                                 }
                                 session->bedrockProtocol = clientProtocol;
-                                session->bedrockVersion = resolveVersion(clientProtocol);
+                                session->bedrockVersion = Bedrock::resolveVersion(clientProtocol);
                                 Logger::info("RequestNetworkSettings proto=" + std::to_string(clientProtocol) + " (" + session->bedrockVersion + ")");
                             }
 
