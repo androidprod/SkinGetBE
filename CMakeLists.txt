@@ -20,6 +20,7 @@ FetchContent_MakeAvailable(zlib)
 set(PROJECT_SOURCES
     main.cpp
     Util/Logger.cpp
+    Bedrock/Version.cpp
 )
 
 if(WIN32)
